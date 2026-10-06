@@ -106,6 +106,28 @@ function buildContents(message: string | undefined, image: string | undefined, h
   return contents;
 }
 
+// 503（混雑）やネットワーク系エラー時に、少し待って最大2回まで自動で再試行する
+async function generateContentWithRetry(
+  client: GoogleGenAI,
+  params: Parameters<GoogleGenAI["models"]["generateContent"]>[0],
+  maxRetries = 2
+) {
+  let lastError: any;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await client.models.generateContent(params);
+    } catch (error: any) {
+      lastError = error;
+      const status = error?.status || error?.code;
+      const isRetryable = status === 503 || status === "UNAVAILABLE" || status === 429;
+      if (!isRetryable || attempt === maxRetries) throw error;
+      const waitMs = 1000 * (attempt + 1); // 1秒、2秒と待ち時間を延ばす
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  throw lastError;
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -132,7 +154,7 @@ async function startServer() {
       const relevant = findRelevantPatterns(message);
       const systemInstruction = SUPPORT_SYSTEM_INSTRUCTION + patternsToReferenceText(relevant);
 
-      const response = await client.models.generateContent({
+      const response = await generateContentWithRetry(client, {
         model: "gemini-3.8-flash",
         contents: buildContents(message, image, history),
         config: { systemInstruction, temperature: 0.2 },
@@ -141,6 +163,13 @@ async function startServer() {
       res.json({ text: response.text || "" });
     } catch (error: any) {
       console.error("Gemini API Error:", error);
+      const status = error?.status || error?.code;
+      if (status === 503 || status === "UNAVAILABLE" || status === 429) {
+        return res.status(503).json({
+          error: "BUSY",
+          message: "今、AIが混み合っています。30秒ほど待ってから、もう一度「送る」を押してみてください。",
+        });
+      }
       res.status(500).json({ error: "INTERNAL_ERROR", message: error.message || "" });
     }
   });
@@ -159,7 +188,7 @@ async function startServer() {
         });
       }
 
-      const response = await client.models.generateContent({
+      const response = await generateContentWithRetry(client, {
         model: "gemini-3.8-flash",
         contents: [{ role: "user", parts: [{ text: message || "" }] }],
         config: { systemInstruction: CHECK_SYSTEM_INSTRUCTION, temperature: 0.1 },
@@ -168,6 +197,13 @@ async function startServer() {
       res.json({ text: response.text || "" });
     } catch (error: any) {
       console.error("Gemini API Error:", error);
+      const status = error?.status || error?.code;
+      if (status === 503 || status === "UNAVAILABLE" || status === 429) {
+        return res.status(503).json({
+          error: "BUSY",
+          message: "今、AIが混み合っています。30秒ほど待ってから、もう一度お試しください。",
+        });
+      }
       res.status(500).json({ error: "INTERNAL_ERROR", message: error.message || "" });
     }
   });
