@@ -1,0 +1,6 @@
+{
+  "name": "やさスマAI",
+  "description": "高齢者向けのやさしいスマホ相談アプリ",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
